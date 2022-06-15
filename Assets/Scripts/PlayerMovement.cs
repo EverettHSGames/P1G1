@@ -1,34 +1,87 @@
-using System.Collections;
+﻿using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
 public class PlayerMovement : MonoBehaviour
 {
+    [SerializeField] Transform orientation;
+
     [Header("Movement")]
-    public float moveSpeed;
+    [SerializeField] float moveSpeed = 6f;
+    [SerializeField] float crouchSpeed = 3f;
+    [SerializeField] float airMultiplier = 0.4f;
+    [SerializeField] float movementMultiplier = 10f;
+    [SerializeField] float crouchMultiplier = 5f;
 
-    public float groundDrag;
+    [Header("Sprinting")]
+    [SerializeField] float walkSpeed = 4f;
+    [SerializeField] float sprintSpeed = 6f;
+    [SerializeField] float acceleration = 10f;
 
-    public float jumpForce;
-    public float jumpCooldown;
-    public float airMultiplier;
-    bool readyToJump;
+    [Header("Jumping")]
+    [SerializeField] float jumpForce = 5f;
+    [SerializeField] float jumpRate = 15f;
+
+    [Header("Crouching")]
+    [SerializeField] CapsuleCollider playerCollider;
 
     [Header("Keybinds")]
-    public KeyCode jumpKey = KeyCode.Space;
+    [SerializeField] KeyCode jumpKey = KeyCode.Space;
+    [SerializeField] KeyCode sprintKey = KeyCode.LeftShift;
+    [SerializeField] KeyCode crouchKey = KeyCode.C;
 
-    [Header("Ground Check")]
-    public float playerHeight;
-    public LayerMask whatIsGround;
-    bool grounded;
+    [Header("Drag")]
+    [SerializeField] float groundDrag = 6f;
+    [SerializeField] float airDrag = 2f;
+    [SerializeField] float grapplingDrag = 0.001f;
 
-    public Transform orientation;
+    float horizontalMovement;
+    float verticalMovement;
 
-    float horizontalInput;
-    float verticalInput;
+    [Header("Ground Detection")]
+    [SerializeField] Transform groundCheck;
+    [SerializeField] LayerMask groundMask;
+    [SerializeField] float groundDistance = 0.2f;
+    public bool isGrounded { get; private set; }
+
+    [Header("HeadBob")]
+    [SerializeField] Animator headBobAnim;
+
+    [Header("Script References")]
+    public GrapplingGun grapplingGun;
+    public CalculateSpeed calculateSpeed;
 
     Vector3 moveDirection;
+    Vector3 slopeMoveDirection;
+
     Rigidbody rb;
+
+    RaycastHit slopeHit;
+
+    [Header("Debug Variables")]
+    [SerializeField] public bool isCrouching;
+    [SerializeField] public bool isMoving;
+
+    float crouchYScale = 0.5f;
+    float playerHeight = 2f;
+
+    float nextTimeToJump = 0f;
+
+    private bool OnSlope()
+    {
+        if (Physics.Raycast(transform.position, Vector3.down, out slopeHit, playerHeight / 2 + 0.5f))
+        {
+            if (slopeHit.normal != Vector3.up)
+            {
+                return true;
+            }
+            else
+            {
+                return false;
+            }
+        }
+        return false;
+    }
 
     private void Start()
     {
@@ -38,18 +91,139 @@ public class PlayerMovement : MonoBehaviour
 
     private void Update()
     {
-        //ground check
-        grounded = Physics.Raycast(transform.position, Vector3.down, playerHeight * 0.5f + 0.2f, whatIsGround);
+        isGrounded = Physics.CheckSphere(groundCheck.position, groundDistance, groundMask);
 
         MyInput();
+        ControlDrag();
+        ControlSpeed();
+        CheckIfMoving();
 
-        SpeedControl();
+        if (Input.GetKey(jumpKey) && isGrounded && Time.time >= nextTimeToJump)
+        {
+            nextTimeToJump = Time.time + 1f / jumpRate;
+            Jump();
+        }
 
-        // handle drag
-        if (grounded)
-            rb.drag = groundDrag;
+        if (Input.GetKeyDown(crouchKey))
+        {
+            Crouch();
+            isCrouching = true;
+        }
+
+        if (Input.GetKeyUp(crouchKey))
+        {
+            UnCrouch();
+            isCrouching = false;
+        }
+
+        slopeMoveDirection = Vector3.ProjectOnPlane(moveDirection, slopeHit.normal);
+
+        AnimateWeapon();
+    }
+
+    void AnimateWeapon()
+    {
+        //if (isMoving)
+        //{
+        //    headBobAnim.enabled = true;
+        //}
+        //else
+        //{
+        //    headBobAnim.enabled = false;
+        //}
+
+        //if (!isGrounded)
+        //{
+        //    headBobAnim.enabled = false;
+        //}
+
+        //if (isMoving && isCrouching)
+        //{
+        //    headBobAnim.enabled = false;
+        //}
+    }
+
+    void MyInput()
+    {
+        horizontalMovement = Input.GetAxisRaw("Horizontal");
+        verticalMovement = Input.GetAxisRaw("Vertical");
+
+        moveDirection = orientation.forward * verticalMovement + orientation.right * horizontalMovement;
+    }
+
+    void Jump()
+    {
+        if (isGrounded)
+        {
+            rb.velocity = new Vector3(rb.velocity.x, 0, rb.velocity.z);
+            rb.AddForce(transform.up * jumpForce, ForceMode.Impulse);
+        }
+    }
+
+    void Crouch()
+    {
+        transform.localScale = new Vector3(1f, 0.5f, 1f);
+        playerCollider.height = 1f;
+    }
+
+    void UnCrouch()
+    {
+        transform.localScale = new Vector3(1f, 1f, 1f);
+        playerCollider.height = 2f;
+    }
+
+    void ControlSpeed()
+    {
+        if (Input.GetKey(sprintKey) && isGrounded)
+        {
+            moveSpeed = Mathf.Lerp(moveSpeed, sprintSpeed, acceleration * Time.deltaTime);
+        }
         else
-            rb.drag = 0;
+        {
+            moveSpeed = Mathf.Lerp(moveSpeed, walkSpeed, acceleration * Time.deltaTime);
+        }
+    }
+
+    void ControlDrag()
+    {
+        if (isGrounded)
+        {
+            if (grapplingGun.IsGrappling())
+            {
+                rb.drag = grapplingDrag;
+            }
+            else
+            {
+                rb.drag = groundDrag;
+            }
+        }
+        else
+        {
+            
+            if (grapplingGun.IsGrappling())
+            {
+                rb.drag = grapplingDrag;
+            }
+            else
+            {
+                rb.drag = airDrag;
+            }
+        }
+    }
+
+    void CheckIfMoving()
+    {
+        if (isGrounded)
+        {
+            if (calculateSpeed.speed > 3f)
+            {
+                isMoving = true;
+            }
+            else if (calculateSpeed.speed < 3f)
+            {
+                isMoving = false;
+            }
+        }
     }
 
     private void FixedUpdate()
@@ -57,58 +231,34 @@ public class PlayerMovement : MonoBehaviour
         MovePlayer();
     }
 
-    private void MyInput()
+    void MovePlayer()
     {
-        horizontalInput = Input.GetAxisRaw("Horizontal");
-        verticalInput = Input.GetAxisRaw("Vertical");
-
-        // when to jump
-        if(Input.GetKey(jumpKey) && readyToJump && grounded)
+        if (isGrounded && !OnSlope() && !isCrouching)
         {
-            Jump();
-            
-            readyToJump = false;
+            rb.AddForce(moveDirection.normalized * moveSpeed * movementMultiplier, ForceMode.Acceleration);
+        }
 
-            Invoke(nameof(ResetJump), jumpCooldown);
+        if (isGrounded && OnSlope())
+        {
+            rb.AddForce(slopeMoveDirection.normalized * moveSpeed * movementMultiplier, ForceMode.Acceleration);
+        }
+
+        if (!isGrounded)
+        {
+            rb.AddForce(moveDirection.normalized * moveSpeed * movementMultiplier * airMultiplier, ForceMode.Acceleration);
+        }
+
+        if(isGrounded && isCrouching)
+        {
+            rb.AddForce(moveDirection.normalized * crouchSpeed * crouchMultiplier, ForceMode.Acceleration);
         }
     }
 
-    private void MovePlayer()
+    private void OnTriggerEnter(Collider other)
     {
-        // calculate movement direction
-        moveDirection = orientation.forward * verticalInput + orientation.right * horizontalInput;
-
-        // on ground
-        if(grounded)
-            rb.AddForce(moveDirection.normalized * moveSpeed * 10f, ForceMode.Force);
-
-        // in air
-        else if(!grounded)
-            rb.AddForce(moveDirection.normalized * moveSpeed * 10f * airMultiplier, ForceMode.Force);
-    }
-
-    private void SpeedControl()
-    {
-        Vector3 flatVel = new Vector3(rb.velocity.x, 0f, rb.velocity.z);
-
-        //limit velocity if needed
-        if(flatVel.magnitude > moveSpeed)
+        if(other.tag == "JumpBoost")
         {
-            Vector3 limitedVel = flatVel.normalized * moveSpeed;
-            rb.velocity = new Vector3(limitedVel.x, rb.velocity.y, limitedVel.z);
+            rb.AddForce(new Vector3(0f, 150f, 0f), ForceMode.Impulse);
         }
-    }
-
-    private void Jump()
-    {
-        // reset y velocity
-        rb.velocity = new Vector3(rb.velocity.x, 0f, rb.velocity.z);
-
-        rb.AddForce(transform.up * jumpForce, ForceMode.Impulse);
-    }
-
-    private void ResetJump()
-    {
-        readyToJump = true;
     }
 }
